@@ -2,7 +2,6 @@ library(stringr)
 # for use, assign this to "glib" for the next function to work.
 get_glib <- function(){
   # Read in JT's primer csv
-  #lib <-read_csv("~/Projects/phix_host/PrelimAssay/seqdata/dada2_trial_1rep/counts_check/vcpe_oligo_pool.csv", col_names = F)
   lib <- read_csv("~/Projects/phix_host/PrelimAssay/data/vcpe_oligo_pool.csv", col_names = F) # dir corrected 2/6/23
   tmp <- lib$X1
   lib$gene <- str_split(tmp,"_", simplify = T)[,1]
@@ -91,94 +90,3 @@ analyze_dadasam <- function(sampath){
 }
 
 
-##### old version ####
-
-# analyze_dadasam <- function(sampath){
-#   out <- list()
-#   # Read in sam into table
-#   #sam <- read.table("sed_sam/lig_rep1.dada.sam")
-#   sam <- read.table(sampath)
-#   tmp <- str_split(sam[,1], "=", simplify = TRUE)[,2]
-#   sam$counts <- as.numeric(str_replace(tmp, ";", ""))
-#   sam$mismatches <- as.numeric((str_split(sam[,12], ":", simplify = TRUE)[,3]))
-#   # delete rows with counts == 1 (singletons)
-#   sam <- sam[!(sam$counts == 1),]
-#   # Loop through each read, compare codons
-#   # first, get ref codons
-#   wt.seq <- sam$V10[1]
-#   start <- seq(1, nchar(as.character(wt.seq)), 3)
-#   stop <- start + 2
-#   wt.cod <- str_sub(wt.seq, start, stop)
-#   # create placeholder dataframes (each row will be unique variant seq)
-#   pos_vector <- c("start", paste("pos", 1:174, sep = ""), "stop")
-#   out$pos_df <- as.data.frame(matrix(NA, nrow = nrow(sam), ncol = 176)) # name mut at each pos
-#   colnames(out$pos_df) <- pos_vector
-#   out$sum_df <- as.data.frame(matrix(NA, nrow=nrow(sam), ncol = 5)) # summary df
-#   colnames(out$sum_df) <- c("var","counts","num_mut","muts","muts_pos")
-#   # parse codons and enter muts to pos_df
-#   # at end of each nth var, counts & mut info into sum_df
-#   for (n in 1:nrow(sam)){
-#     out$sum_df$var[n] <- str_split(sam$V1[n], ";", simplify = T)[1] #sq1, sq2, sq3, etc...
-#     out$sum_df$counts[n] <- sam$counts[n]
-#     x <- as.character(sam$V10[n])
-#     x.cod <- str_sub(x, start, stop)
-#     #x.cod <- x.cod[-c(1,176)]
-#     if (x.cod[1] == wt.cod[1]){   #start codon
-#       out$pos_df[n,1] <- "wt"
-#     } else {
-#       out$pos_df[n,1] <- x.cod[1]
-#     }
-#     for (i in 2:133){    #G1 fragment
-#       if (x.cod[i] == wt.cod[i]){
-#         out$pos_df[n,i] <- "wt"
-#       } else {
-#         tmp <- filter(glib, glib$pos == i-1)
-#         if (x.cod[i] %in% tmp$cod.seq){
-#           out$pos_df[n, i] <- tmp[tmp$cod.seq == x.cod[i],]$sub #mut from library
-#         } else {
-#           out$pos_df[n, i] <- x.cod[i] #unintended mut
-#         }
-#       }
-#     }
-#     for (i in 134:135){    #2 codons that are not in the library
-#       if (x.cod[i] == wt.cod[i]){
-#         out$pos_df[n, i] <- "wt"
-#       } else{
-#         out$pos_df[n, i] <- x.cod[i]
-#       }
-#     }
-#     for (i in 136:175){   #G2 fragment
-#       if (x.cod[i] == wt.cod[i]){
-#         out$pos_df[n,i] <- "wt"
-#       } else {
-#         tmp <- filter(glib, glib$pos == i-1)
-#         if (x.cod[i] %in% tmp$cod.seq){
-#           out$pos_df[n, i] <- tmp[tmp$cod.seq == x.cod[i],]$sub
-#         } else {
-#           out$pos_df[n, i] <- x.cod[i]
-#         }
-#       }
-#     }
-#     if (x.cod[176] == wt.cod[176]){   #stop codon
-#       out$pos_df[n,176] <- "wt"
-#     } else {
-#       out$pos_df[n,176] <- x.cod[176]
-#     }
-#     if (n==1){
-#       out$sum_df$num_mut[n] <- 0
-#       out$sum_df$muts[n] <- "none"
-#       out$sum_df$muts_pos[n] <- "none"
-#     } else{
-#       var_n <- out$pos_df[n,] #turn nth row of pos_df into a vector
-#       muts_n <- var_n[which(var_n!="wt")] #get all non-wt entries from all positions
-#       out$sum_df$num_mut[n] <- length(muts_n) # number of mutations for each var
-#       out$sum_df$muts[n] <- paste(muts_n, collapse = "-") # all muts
-#       out$sum_df$muts_pos[n] <- paste(names(muts_n), collapse = "-") # positions of the muts
-#     }
-#   }
-#   return(out)
-# }
-# 
-# 
-# 
-# 
