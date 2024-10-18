@@ -1,0 +1,48 @@
+---
+title: "Exploratory Analysis"
+author: "Yesol Sapozhnikov"
+date: "2024-10-17"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+```
+
+## Get data
+
+```{r}
+# variant counts
+counts <- read.csv("../outputs/dada2result_yesol2.csv")
+counts[counts$var == "wt",]$AAsub <- "_wt"
+counts$AAsub <- gsub(",", "-", counts$AAsub) # change , with - for multiple AA subs for better readability
+counts_lig <- counts %>% filter(substr(sample, 1, 3) == "lig") %>% 
+  dplyr::select(AAsub, count, nmut_offtarget)
+counts_t0 <- counts %>% filter(sample == "t0") %>%
+  dplyr::select(AAsub, count, nmut_offtarget)
+counts_lig[is.na(counts_lig)] <- 0
+counts_lig <- aggregate(.~AAsub, data = counts_lig, sum)
+counts_lig <- counts_lig %>% mutate(n_mutAA = str_count(AAsub, "-") + 1)
+counts_t0 <- counts_t0 %>% mutate(n_mutAA = str_count(AAsub, "-") + 1)
+
+# Enrich2 output
+scores_comb <- read_tsv("../outputs/enrich2_results/tsv/Gmut_growth_exp/main_identifiers_scores.tsv",
+                   skip = 1) %>% rename(vars = "value") %>%
+  arrange(vars)
+scores_rep <- read_tsv("../outputs/enrich2_results/tsv/Gmut_growth_exp/main_identifiers_scores_shared_full.tsv", skip = 2) %>% arrange(value)
+names(scores_rep) <- c("vars", "SE_rep1", "score_rep1", "SE_rep2", "score_rep2", "SE_rep3", "score_rep3")
+```
+Filter out relevant samples and look at number of reads, variants, and off-target variants:
+```{r}
+inputs <- c("t0", 
+            "t35_rep1", "t35_rep2", "t35_rep3",
+            "t70_dil_day2_rep1", "t70_dil_day2_rep2", "t70_dil_day2_rep3")
+counts %>% filter(sample %in% inputs) %>%
+  group_by(sample) %>%
+  summarise(n_reads = sum(count),
+            n_variants = n(),
+            total_offtarget = sum(nmut_offtarget, na.rm = TRUE)) %>% print.data.frame()
+```
+
+

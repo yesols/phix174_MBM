@@ -1,0 +1,703 @@
+---
+title: "ddG and Viability Modeling"
+author: "Yesol Sapozhnikov"
+date: "2024-10-17"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(mrbglm)
+library(ggpubr)
+library(cowplot)
+```
+
+## Get data
+
+```{r}
+ddg_fold <- read.csv("../outputs/ddg_errors/phix_fold_err.csv")[,-1]
+ddg_trimer <- read.csv("../outputs/ddg_errors/phix_trimer_err.csv")[,-1]
+scores <- read_tsv("../outputs/enrich2_results/tsv/Gmut_growth_exp/main_identifiers_scores.tsv",
+                   skip = 1)
+names(scores)[1] <- "variant"
+#Combine scores with ddg dataframes
+ddg <- data.frame(variant = ddg_fold$mut,
+                  ddg_fold = ddg_fold$total, ddg_trimer = ddg_trimer$total,
+                  errbd_fold = ddg_fold$upr_bd, errbd_trimer = ddg_trimer$upr_bd,
+                  errpt_fold = ddg_fold$err_pred, errpt_trimer = ddg_trimer$err_pred,
+                  residue = ddg_fold$residue,
+                  str = ddg_fold$str,
+                  RSA = ddg_fold$RSA)
+scores <- inner_join(scores, ddg) %>% arrange(variant)
+
+# for counts data:
+counts <- read.csv("../outputs/dada2result_yesol2.csv")
+counts[counts$var == "wt",]$AAsub <- "_wt"
+counts$AAsub <- gsub(",", "-", counts$AAsub) # change , with - for multiple AA subs for better readability
+counts$sample <- str_replace(counts$sample, "lig.+", "lig") # combine all 3 reps of ligation mix since they're from same pool anyway.
+
+# create missing counts category and simpler structure categories
+inputs <- c("t0", 
+            "t35_rep1", "t35_rep2", "t35_rep3",
+            "t70_dil_day2_rep1", "t70_dil_day2_rep2", "t70_dil_day2_rep3")
+vars_counts <- scores %>% dplyr::select(variant)
+
+for (i in 1:length(inputs)){
+  df <- counts %>% filter(sample == inputs[i]) %>% dplyr::select(AAsub, count)
+  names(df) <- c("variant", inputs[i])
+  vars_counts <- left_join(vars_counts, df)
+}
+vars_counts[is.na(vars_counts)] <- 0
+
+# create category
+for (i in 1:nrow(vars_counts)){
+  t0_i <- vars_counts$t0[i]
+  t35_i <- sum(vars_counts$t35_rep1[i], vars_counts$t35_rep2[i], vars_counts$t35_rep3[i])
+  t70_i <- sum(vars_counts$t70_dil_day2_rep1[i], vars_counts$t70_dil_day2_rep2[i], vars_counts$t70_dil_day2_rep3[i])
+  if (t0_i == 0 & t35_i == 0) vars_counts$missing[i] <-  "t0-t35"
+  else if (t0_i == 0 & t70_i == 0) vars_counts$missing[i] <-  "t0-t70"
+  else if (t0_i == 0) vars_counts$missing[i] <-  "t0"
+  else if (t35_i == 0 & t70_i == 0) vars_counts$missing[i] <- "t35-t70"
+  else if (t35_i == 0) vars_counts$missing[i] <- "t35"
+  else if (t70_i == 0) vars_counts$missing[i] <- "t70"
+  else vars_counts$missing[i] <- "none"
+}
+scores$missing <- as.factor(vars_counts$missing)
+
+# remove some of the missing categories that don't appear to be contributive and 
+# create a category of viable vs inviable
+
+# all 688 observed singles
+scores_viability_all <- scores %>% 
+  mutate(viability = ifelse(missing == "t35-t70", 0, 1))
+# filter out some missing categories 
+scores_viability <- scores %>% filter(missing %in% c("none", "t0", "t35-t70", "t70")) %>%
+  mutate(viability = ifelse(missing == "t35-t70", 0, 1))
+
+
+########## Residue 119 ############
+# Try removing all datapoints that are residue 119 based on what we know from SDM work.
+# Total of 7 datapoints
+scores_viability_all <- scores_viability_all %>% filter(residue != 119)
+scores_viability <- scores_viability %>% filter(residue != 119)
+
+
+######### Doubles ###########
+
+scores_all <- read_tsv("../outputs/enrich2_results/tsv/Gmut_growth_exp/main_identifiers_scores.tsv",
+                   skip = 1)
+names(scores_all)[1] <- "variant"
+
+scores_sing <- inner_join(scores_all, ddg) %>% arrange(variant)
+
+# Create timepoint counts dataframe -- all scored variants
+inputs <- c("t0", 
+            "t35_rep1", "t35_rep2", "t35_rep3",
+            "t70_dil_day2_rep1", "t70_dil_day2_rep2", "t70_dil_day2_rep3")
+vars_counts2 <- scores_all %>% dplyr::select(variant)
+
+for (i in 1:length(inputs)){
+  df <- counts %>% filter(sample == inputs[i]) %>% dplyr::select(AAsub, count)
+  names(df) <- c("variant", inputs[i])
+  vars_counts2 <- left_join(vars_counts2, df)
+}
+vars_counts2[is.na(vars_counts2)] <- 0
+
+# create category for missing timepoints
+for (i in 1:nrow(vars_counts2)){
+  t0_i <- vars_counts2$t0[i]
+  t35_i <- sum(vars_counts2$t35_rep1[i], vars_counts2$t35_rep2[i], vars_counts2$t35_rep3[i])
+  t70_i <- sum(vars_counts2$t70_dil_day2_rep1[i], vars_counts2$t70_dil_day2_rep2[i], vars_counts2$t70_dil_day2_rep3[i])
+  if (t0_i == 0 & t35_i == 0) vars_counts2$missing[i] <-  "t0-t35"
+  else if (t0_i == 0 & t70_i == 0) vars_counts2$missing[i] <-  "t0_t70"
+  else if (t0_i == 0) vars_counts2$missing[i] <-  "t0"
+  else if (t35_i == 0 & t70_i == 0) vars_counts2$missing[i] <- "t35-t70"
+  else if (t35_i == 0) vars_counts2$missing[i] <- "t35"
+  else if (t70_i == 0) vars_counts2$missing[i] <- "t70"
+  else vars_counts2$missing[i] <- "none"
+}
+# create category for number of muts
+vars_counts2 <- vars_counts2 %>%
+  mutate(nmut = str_count(variant, "-") + 1,
+         viability = ifelse(missing == "t35-t70", 0, 1))
+
+# create a category of viable vs inviable
+scores_viability <- left_join(scores_sing, vars_counts2[,c("variant", "missing")]) %>% 
+  #filter(missing %in% c("none", "t0", "t35-t70", "t70")) %>%   ### omit this filtering for this analysis
+  mutate(viability = ifelse(missing == "t35-t70", 0, 1))
+
+# Create doubles dataframe containing time series counts, score, and constituent muts
+doubles <- inner_join(scores_all, vars_counts2) %>% filter(nmut == 2) %>% select(-nmut)
+# Add columns with each mut of the doubles
+for (i in 1:nrow(doubles)){
+  str <- doubles$variant[i]
+  doubles$var1[i] <- str_split(str, "-")[[1]][1]
+  doubles$var2[i] <- str_split(str, "-")[[1]][2]
+}
+
+counts <- 
+  counts %>% filter(sample %in% inputs, nmut_tot <= 2) %>% 
+    select(sample, AAsub, count, nmut_tot, nmut_offtarget)
+
+vars_sing <- scores_sing$variant
+doub <- data.frame(vars = doubles$variant,
+                   mut1 = doubles$var1,
+                   mut2 = doubles$var2,
+                   mut1_present = rep(NA, nrow(doubles)),
+                   mut2_present = rep(NA, nrow(doubles)),
+                   both_present = rep(NA, nrow(doubles)))
+for (i in 1:nrow(doub)){
+  doub$mut1_present[i] <- doub$mut1[i] %in% vars_sing
+  doub$mut2_present[i] <- doub$mut2[i] %in% vars_sing
+  doub$both_present[i] <- doub$mut1_present[i] + doub$mut2_present[i]
+}
+
+doubles2 <- doubles %>% select(variant, score, viability:var2) %>%
+  rename(mut1 = var1, mut2 = var2)
+for (i in 1:nrow(doubles2)){
+  mut <- doubles2$mut1[i] 
+  if (str_sub(mut, nchar(mut), nchar(mut)) == "*"){
+    doubles2$ddg_fold1[i] <- NA
+    doubles2$ddg_trimer1[i] <- NA
+  } else if (str_split(mut, "[0-9]+")[[1]][1] != str_split(mut, "[0-9]+")[[1]][2]){ # check for synonymous muts
+    doubles2$ddg_fold1[i] <- ddg[ddg$variant == mut,]$ddg_fold
+    doubles2$ddg_trimer1[i] <- ddg[ddg$variant == mut,]$ddg_trimer
+  } else {
+    doubles2$ddg_fold1[i] <- 0
+    doubles2$ddg_trimer1[i] <- 0
+  }
+  if (doub$mut1_present[i] == TRUE){
+    doubles2$score1[i] <- scores_viability[scores_viability$variant == mut,]$score
+    doubles2$viab1[i] <- scores_viability[scores_viability$variant == mut,]$viability
+    doubles2$as_sing1[i] <- TRUE
+  } else {
+    doubles2$score1[i] <- NA
+    doubles2$viab1[i] <- NA
+    doubles2$as_sing1[i] <- FALSE
+  }
+  mut <- doubles2$mut2[i] 
+  if (str_sub(mut, nchar(mut), nchar(mut)) == "*"){
+    doubles2$ddg_fold2[i] <- NA
+    doubles2$ddg_trimer2[i] <- NA
+  } else if (str_split(mut, "[0-9]+")[[1]][1] != str_split(mut, "[0-9]+")[[1]][2]){
+    doubles2$ddg_fold2[i] <- ddg[ddg$variant == mut,]$ddg_fold
+    doubles2$ddg_trimer2[i] <- ddg[ddg$variant == mut,]$ddg_trimer
+  } else {
+    doubles2$ddg_fold2[i] <- 0
+    doubles2$ddg_trimer2[i] <- 0
+  }
+  if (doub$mut2_present[i] == TRUE){
+    doubles2$score2[i] <- scores_viability[scores_viability$variant == mut,]$score
+    doubles2$viab2[i] <- scores_viability[scores_viability$variant == mut,]$viability
+    doubles2$as_sing2[i] <- TRUE
+  } else {
+    doubles2$score2[i] <- NA
+    doubles2$viab2[i] <- NA
+    doubles2$as_sing2[i] <- FALSE
+  }
+}
+
+doubles2 <- doubles2 %>%
+  mutate(ddg_fold_sum = ddg_fold1 + ddg_fold2,
+         ddg_trimer_sum = ddg_trimer1 + ddg_trimer2)
+
+doubles2 <- doubles2 %>% filter(!is.na(ddg_fold_sum), !is.na(ddg_trimer_sum))
+
+
+viab_double <- doubles2 %>% 
+  select(variant, viability) %>%
+  mutate(type = "double")
+viab_single <- scores_viability_all %>%
+  select(variant, viability) %>%
+  mutate(type = "single")
+viab_comb <- bind_rows(viab_single, viab_double)
+viab_df <- viab_comb %>% group_by(type, viability) %>%
+  summarise(unique_vars = n()) %>%
+  mutate(viability = factor(viability),
+         type = factor(type, levels = c("single", "double")))
+
+```
+
+
+Plot # viable and inviable as stacked bar chart, histograms with ddG.
+```{r}
+bar_viab_variants <-
+ggplot(viab_df) +
+  geom_bar(aes(x = type, y = unique_vars, fill = viability),
+           position = "stack", stat = "identity", width = .3) +
+  scale_fill_manual(values = c("darkorange2", "royalblue4"),
+                    name = "Viability",
+                    labels = c("inviable", "viable")) +
+  labs(y = "Number of unique variants") +
+  scale_x_discrete(labels = c("single" = "Singles", "double" = "Doubles")) +
+  theme_bw() +
+  theme(axis.title.x = element_blank(),
+        #legend.position = c(0.2, 0.85)
+  )
+hist_vars_along_res <-
+scores_viability_all %>%
+  ggplot(aes(x = residue)) +
+  geom_histogram(aes(fill = as.factor(viability)), binwidth = 1) +
+  scale_fill_manual(values = c("darkorange2", "royalblue4"),
+                    name = "Viability",
+                    labels = c("inviable", "viable")) +
+  labs(x = "Mutated residue", y = "Unique variants") +
+  theme_bw() +
+  theme(legend.position = "none",
+        axis.title = element_text(size = 10))
+ddg_along_res <- 
+scores_viability_all %>%
+  ggplot(aes(x = residue, y = ddg_fold)) +
+  geom_point(aes(color = as.factor(viability))) +
+  scale_color_manual(values = c("darkorange2", "royalblue4"), name = "Viability",
+                    labels = c("inviable", "viable")) +
+  labs(x = "Mutated residue", y = expression(paste(Delta, Delta, "G")[fold]~(kcal/mol))) +
+  theme_bw() +
+  theme(legend.position = "none",
+        axis.title = element_text(size = 10))
+```
+
+```{r}
+ggarrange(bar_viab_variants,
+          ggarrange(hist_vars_along_res, ddg_along_res,
+                    ncol = 1, labels = c("B", "C")),
+          ncol = 2,
+          labels = "A")
+
+# ggsave("../figures/overview_plots.pdf", 
+#       width = 200, height = 100, units = "mm", dpi = 300)
+```
+
+
+## Viability modeling - Singles
+
+MBM fitting
+```{r}
+m <- glm.mrb(viability~ddg_fold+ddg_trimer, data = scores_viability_all,
+                     x.with.me.offsets = c(TRUE, TRUE),
+                     me.offsets = ~(abs(errpt_fold))+(abs(errpt_trimer)),
+                     minp.formula = ~-1,
+                     maxp.formula = ~1,
+                     control = list(lower.intercepts = 'xq5',
+                                    upper.intercepts = 'xq95'),
+                     link = 'logit' ) 
+summary(m)
+```
+
+Creating figures
+```{r}
+# Create a new df to store predicted values
+viab_pred <- scores_viability_all %>%
+  select(variant, ddg_fold, ddg_trimer, errpt_fold, errpt_trimer, viability)
+x <- seq(-3, max(scores_viability_all$ddg_fold), length.out = 100)
+y <- seq(-3, 20, length.out = 100)
+grid <- expand.grid(x, y)
+viab_pred <- data.frame(ddg_fold = grid$Var1,
+                        ddg_trimer = grid$Var2)
+viab_pred$bi_fit <- predict(m, newdata = viab_pred)
+viab_pred$fold_fit <- predict(m,
+                              newdata = data.frame(ddg_fold = viab_pred$ddg_fold,
+                                                   ddg_trimer = rep(0, nrow(viab_pred))))
+viab_pred$bind_fit <- predict(m,
+                              newdata = data.frame(ddg_fold = rep(0, nrow(viab_pred)),
+                                                   ddg_trimer = viab_pred$ddg_trimer))
+
+pal <- colorRampPalette(c("#e9ede1", "#2dada3", "#20488a"))
+colors10 <- pal(10)
+
+# Contour plot
+p1 <- 
+ggplot(viab_pred, aes(ddg_fold, ddg_trimer)) +
+  # contour plot (legend removed because discrete legend doesn't look good)
+  geom_contour_filled(aes(z = bi_fit)) +
+  scale_fill_manual(values = colors10, 
+                    guide = "none") +
+  coord_cartesian(xlim = c(-3, 20), ylim = c(-3, 20)) +
+  theme_classic() +
+  scale_y_continuous(expand = c(0,0)) +
+  scale_x_continuous(expand = c(0,0)) +
+  # create points (that will be covered up by the second geom_point) for the binned color legend
+  geom_point(data = scores_viability_all, aes(ddg_fold, ddg_trimer, 
+                                          color = m$fitted.values, shape = factor(viability))) +
+  scale_color_stepsn(n.breaks = 10, colors = colors10) +
+  # create points to show viable/inviable datapoints
+  geom_point(data = scores_viability_all, aes(ddg_fold, ddg_trimer, shape = factor(viability)),
+             size = 2) +
+  scale_shape_manual(values = c(4, 20)) +
+  
+  labs(color = "Probability", shape = "Viability",
+       x = expression(paste(Delta, Delta, "G")[fold]~(kcal/mol)),
+       y = expression(paste(Delta, Delta, "G")[bind]~(kcal/mol))) +
+  theme(legend.direction = "vertical",
+        legend.box = "horizontal",
+        legend.position = c(.7, .7),
+        axis.title = element_text(size = 12), axis.text = element_text(size = 10),
+        legend.spacing.y = unit(0.1, "cm"),
+        legend.text = element_text(size = 8),
+        plot.margin = margin(t = 10, r = 20, b = 10, l = 10))
+
+# probability curve while ddg_bind is held at zero
+start <- min(scores_viability_all$ddg_fold)
+end <- max(scores_viability_all$ddg_fold)
+x <- seq(start, end, by = 0.05)
+
+prob <- predict(m,
+             newdata = data.frame(
+               ddg_fold = x,
+               ddg_trimer = rep(0, length(x))
+             ))
+p2 <- 
+ggplot(scores_viability_all, aes(x = ddg_fold, y = viability)) +
+  geom_jitter(height = 0.15, color = "darkgrey", size = 0.5) +
+  theme_classic() +
+  geom_line(data = data.frame(x = x, y = prob),
+             aes(x = x, y = y), linewidth = 1.5) +
+  labs(x = expression(paste(Delta, Delta, "G")[fold]~(kcal/mol)),
+       y = "Viability") +
+  theme(axis.title = element_text(size = 12), axis.text = element_text(size = 10)) +
+  scale_x_continuous(limits = c(-4, 33)) +
+  scale_y_continuous(breaks = c(0, 1), limits = c(-.2, 1.2))
+
+# probability curve while ddg_fold is held at zero
+start <- min(scores_viability_all$ddg_trimer)
+end <- max(scores_viability_all$ddg_fold)
+x <- seq(start, end, by = 0.05)
+
+prob <- predict(m,
+             newdata = data.frame(
+               ddg_fold = rep(0, length(x)),
+               ddg_trimer = x
+             ))
+p3 <- 
+ggplot(scores_viability_all, aes(x = ddg_trimer, y = viability)) +
+  geom_jitter(height = 0.15, color = "darkgrey", size = 0.5) +
+  theme_classic() +
+  geom_line(data = data.frame(x = x, y = prob),
+             aes(x = x, y = y), linewidth = 1.5) +
+  labs(x = expression(paste(Delta, Delta, "G")[bind]~(kcal/mol)),
+       y = "Viability") +
+  theme(axis.title = element_text(size = 12), axis.text = element_text(size = 10)) +
+  scale_x_continuous(limits = c(-4, 33)) +
+  scale_y_continuous(breaks = c(0, 1), limits = c(-.2, 1.2))
+
+# Put all 3 plots together
+right_col <- plot_grid(p2, p3, nrow = 2)
+plot_grid(p1, right_col, ncol = 2, rel_widths = c(3, 2), labels = c("A", "B"))
+#ggsave("../figures/viab_models.pdf", width = 170, height = 90, units = "mm", dpi = 300)
+```
+
+## Linear regression modeling
+
+```{r}
+# Take viable variants only, also add max ddG.
+scores2 <- scores_viability_all %>% filter(viability == 1) %>%
+  mutate(max_ddg = pmax(ddg_fold, ddg_trimer))
+lm_modw <- lm(score~ddg_fold+ddg_trimer, data = scores2, weights = 1/(errbd_fold+errbd_trimer))
+summary(lm_modw)
+```
+Plot the effect of each ddg separately
+```{r}
+# Fit 
+lm_f <- lm(score~ddg_fold, data = scores2, weights = 1/errbd_fold)
+lm_b <- lm(score~ddg_trimer, data = scores2, weight = 1/errbd_trimer)
+
+# get lm_f coef and plot
+eq <- paste0("y = ", round(lm_f$coefficients[2], 2), "x + ", round(lm_f$coefficients[1], 2))
+score_fold <- 
+ggplot(scores2, aes(ddg_fold, score)) +
+  geom_point(size = .8) + #geom_smooth(method = "lm", se = F) +
+  geom_abline(intercept = lm_f$coefficients[1], slope = lm_f$coefficients[2], color = "red") +
+  labs(
+    x = expression(paste(Delta, Delta, "G")[fold]~(kcal/mol)), y = "Score"
+    ) +
+  theme_bw() + theme(axis.text = element_text(size = 12),
+                     axis.title = element_text(size = 14)) +
+  scale_x_continuous(limits = c(-3, 10)) +
+  annotate("text", label = eq, x = 7, y = -5, size = 4) +
+  annotate("text", x = 7, y = -6, size = 4, 
+           label = "paste(italic(R) ^ 2, \" = 0.01\")", parse = TRUE)
+
+# get lm_b coef and plot
+eq <- paste0("y = ", round(lm_b$coefficients[2], 2), "x + ", round(lm_b$coefficients[1], 2))
+score_bind <- 
+ggplot(scores2, aes(ddg_trimer, score)) +
+  geom_point(size = .8) + 
+  geom_abline(intercept = lm_b$coefficients[1], slope = lm_b$coefficients[2], color = "red") +
+  labs(
+    x = expression(paste(Delta, Delta, "G")[bind]~(kcal/mol)), y = NULL
+    ) +
+  theme_bw() + theme(axis.text = element_text(size = 12),
+                     axis.title = element_text(size = 14)) +
+  scale_x_continuous(limits = c(-3, 10)) +
+  annotate("text", label = eq, x = 7, y = -5, size = 4) +
+  annotate("text", x = 7, y = -6, size = 4, 
+           label = "paste(italic(R) ^ 2, \" = 0.003\")", parse = TRUE)
+
+# combine both
+score_both <- 
+plot_grid(score_fold, score_bind, labels = c("A", "B"))
+ggsave("../figures/scores.pdf",
+       width = 170, height = 90, units = "mm", dpi = 300)
+
+plot_grid(
+  score_both,
+  ncol = 1,
+  rel_heights = c(0.1, 1)
+)
+#ggsave("../figures/scores.png", width = 9, height = 4, bg = "white")
+```
+
+## Viability modeling - Doubles
+
+Create a new doubles dataframe with errors and fit MBM:
+```{r}
+doubles2_err <- doubles2 %>% select(variant, viability, mut1, mut2, ddg_fold_sum, ddg_trimer_sum)
+for (i in 1:nrow(doubles2_err)){
+  err_fold1 <- abs(ddg[ddg$variant == doubles2_err$mut1[i], "errpt_fold"])
+  err_fold2 <- abs(ddg[ddg$variant == doubles2_err$mut2[i], "errpt_fold"])
+  err_trimer1 <- abs(ddg[ddg$variant == doubles2_err$mut1[i], "errpt_trimer"])
+  err_trimer2 <- abs(ddg[ddg$variant == doubles2_err$mut2[i], "errpt_trimer"])
+  doubles2_err$errpt_fold_sum[i] <- sum(err_fold1, err_fold2)
+  doubles2_err$errpt_trimer_sum[i] <- sum(err_trimer1, err_trimer2)
+}
+
+m_doubles <- glm.mrb(viability~ddg_fold_sum+ddg_trimer_sum, data = doubles2_err,
+                     x.with.me.offsets = c(TRUE, TRUE),
+                     me.offsets = ~errpt_fold_sum+errpt_trimer_sum,
+                     minp.formula = ~-1,
+                     maxp.formula = ~1,
+                     control = list(lower.intercepts = 'xq5',
+                                    upper.intercepts = 'xq95'),
+                     link = 'logit' )
+summary(m_doubles)
+```
+
+Plots
+```{r}
+# bivariate contour plot with scatter plot overlay
+x <- seq(-3, max(doubles2_err$ddg_fold_sum), length.out = 100)
+y <- seq(-3, 20, length.out = 100)
+grid <- expand.grid(x, y)
+doubles2_err_pred <- data.frame(ddg_fold_sum = grid$Var1,
+                                ddg_trimer_sum = grid$Var2)
+doubles2_err_pred$bi_fit <- predict(m_doubles,
+                                    newdata = doubles2_err_pred)
+doubles2_err_pred$fold_fit <- 
+  predict(m_doubles, 
+          newdata = data.frame(ddg_fold_sum = doubles2_err_pred$ddg_fold_sum, 
+                               ddg_trimer_sum = rep(0, nrow(doubles2_err_pred))))
+doubles2_err_pred$bind_fit <- 
+  predict(m_doubles,
+          newdata = data.frame(ddg_fold_sum = rep(0, nrow(doubles2_err_pred)),
+                               ddg_trimer_sum = doubles2_err_pred$ddg_trimer_sum))
+pal <- colorRampPalette(c("#e9ede1", "#2dada3", "#20488a"))
+colors10 <- pal(10)
+p1 <-
+ggplot(doubles2_err_pred, aes(ddg_fold_sum, ddg_trimer_sum)) +
+  # contour plot (legend removed because discrete legend doesn't look good)
+  geom_contour_filled(aes(z = bi_fit)) +
+  scale_fill_manual(values = colors10, 
+                    guide = "none") +
+  coord_cartesian(xlim = c(-3, 20), ylim = c(-3, 20)) +
+  theme_classic() +
+  scale_y_continuous(expand = c(0,0)) +
+  scale_x_continuous(expand = c(0,0)) +
+  # create points (that will be covered up by the second geom_point) for the binned color legend
+  geom_point(data = doubles2_err, aes(ddg_fold_sum, ddg_trimer_sum, 
+                                          color = m_doubles$fitted.values, shape = factor(viability))) +
+  scale_color_stepsn(n.breaks = 10, colors = colors10) +
+  # create points to show viable/inviable datapoints
+  geom_point(data = doubles2_err, aes(ddg_fold_sum, ddg_trimer_sum, shape = factor(viability)),
+             size = 2) +
+  scale_shape_manual(values = c(4, 20)) +
+  
+  labs(color = "Probability", shape = "Viability",
+       x = expression(paste("Sum of ", Delta, Delta, "G")[fold]~(kcal/mol)),
+       y = expression(paste("Sum of ", Delta, Delta, "G")[bind]~(kcal/mol))) +
+  theme(legend.direction = "vertical",
+        legend.box = "horizontal",
+        legend.position = c(.7, .7),
+        axis.title = element_text(size = 12), axis.text = element_text(size = 10),
+        legend.spacing.y = unit(0.1, "cm"),
+        legend.text = element_text(size = 8),
+        plot.margin = margin(t = 10, r = 20, b = 10, l = 10))
+
+# visualize ddg_fold_sum effect on probability while ddg_bind held at zero
+start <- min(doubles2_err$ddg_fold_sum)
+end <- max(doubles2_err$ddg_fold_sum)
+x <- seq(start, end, by = 0.05)
+prob <- predict(m_doubles, newdata = data.frame(ddg_fold_sum = x,
+                                         ddg_trimer_sum = rep(0, length(x))))
+p2 <- 
+ggplot(doubles2_err, aes(ddg_fold_sum, y = viability)) +
+  geom_jitter(height = 0.15, color = "darkgrey", size = 0.5) +
+  theme_classic() +
+  geom_line(data = data.frame(x = x, y = prob),
+            aes(x = x, y = y), linewidth = 1.5) +
+  labs(x = expression(paste("Sum of ", Delta, Delta, "G")[fold]~(kcal/mol)),
+       y = "Viability") +
+  theme(axis.title = element_text(size = 12), axis.text = element_text(size = 10)) +
+  scale_x_continuous(limits = c(-4, 35)) +
+  scale_y_continuous(breaks = c(0, 1), limits = c(-.2, 1.2))
+
+# visualize ddg_trimer_sum effect while ddg_fold held at zero
+start <- min(doubles2_err$ddg_trimer_sum)
+end <- max(doubles2_err$ddg_fold_sum)
+x <- seq(start, end, by = 0.05)
+prob <- predict(m_doubles, newdata = data.frame(ddg_fold_sum = rep(0, length(x)),
+                                         ddg_trimer_sum = x))
+p3 <- 
+ggplot(doubles2_err, aes(x = ddg_trimer_sum, y = viability)) +
+  geom_jitter(height = 0.15, color = "darkgrey", size = 0.5) +
+  theme_classic() +
+  geom_line(data = data.frame(x = x, y = prob),
+             aes(x = x, y = y), linewidth = 1.5) +
+  labs(x = expression(paste("Sum of ", Delta, Delta, "G")[bind]~(kcal/mol)),
+       y = "Viability") +
+  theme(axis.title = element_text(size = 12), axis.text = element_text(size = 10)) +
+  scale_x_continuous(limits = c(-4, 33)) +
+  scale_y_continuous(breaks = c(0, 1), limits = c(-.2, 1.2))
+
+# Put 3 plots together
+right_col <- plot_grid(p2, p3, nrow = 2)
+plot_grid(p1, right_col, ncol = 2, rel_widths = c(3,2), labels = c("A", "B"))
+
+#ggsave("../figures/doub_viab_models.pdf", width = 170, height = 90, units = "mm", dpi = 300)
+
+```
+
+## Doubles viability relationship with singles viability
+
+```{r}
+# Create a column indicating how many of the constituent muts were observed in singles data
+for (i in 1:nrow(doubles2)){
+  if (doubles2$as_sing1[i] == TRUE & doubles2$as_sing2[i] == TRUE){
+    doubles2$n_singles_data[i] <- 2
+  } else if (doubles2$as_sing1[i] == TRUE | doubles2$as_sing2[i] == TRUE){
+    doubles2$n_singles_data[i] <- 1
+  } else {
+    doubles2$n_singles_data[i] <- 0
+  }
+}
+table(doubles2$n_singles_data)
+```
+
+```{r}
+# dataframe for doubles with both known singles
+doubles2_two <- doubles2 %>% filter(n_singles_data == 2) %>%
+  select(variant, viability:ddg_trimer1, viab1, 
+         ddg_fold2:ddg_trimer2, viab2, ddg_fold_sum, ddg_trimer_sum) %>%
+  rename(mut1_viab = viab1, mut2_viab = viab2, double_viab = viability)
+
+for (i in 1:nrow(doubles2_two)){
+  if (doubles2_two$mut1_viab[i] == TRUE && doubles2_two$mut2_viab[i] == TRUE){
+    doubles2_two$singles_info[i] <- "both viable"
+  }
+  else if (doubles2_two$mut1_viab[i] == FALSE && doubles2_two$mut2_viab[i] == FALSE){
+    doubles2_two$singles_info[i] <- "both inviable"
+  } else {
+    doubles2_two$singles_info[i] <- "mixed"
+  }
+}
+
+# dataframe for doubles with only one of the muts known as a single
+doubles2_one <- doubles2 %>% filter(n_singles_data == 1)
+doubles2_one2 <- tibble(variant = doubles2_one$variant,
+                        ddg_fold_sum = doubles2_one$ddg_fold_sum,
+                        ddg_trimer_sum = doubles2_one$ddg_trimer_sum)
+for (i in 1:nrow(doubles2_one)){
+  if (doubles2_one$as_sing1[i] == TRUE){
+    doubles2_one2$mut[i] <- doubles2_one$mut1[i]
+    doubles2_one2$double_viab[i] <- doubles2_one$viability[i]
+    doubles2_one2$mut_viab[i] <- doubles2_one$viab1[i]
+    doubles2_one2$ddg_fold[i] <- doubles2_one$ddg_fold1[i]
+    doubles2_one2$ddg_trimer[i] <- doubles2_one$ddg_trimer1[i]
+    doubles2_one2$ddg_fold_other[i] <- doubles2_one$ddg_fold2[i]
+    doubles2_one2$ddg_trimer_other[i] <- doubles2_one$ddg_trimer2[i]
+  } else{
+    doubles2_one2$mut[i] <- doubles2_one$mut2[i]
+    doubles2_one2$double_viab[i] <- doubles2_one$viability[i]
+    doubles2_one2$mut_viab[i] <- doubles2_one$viab2[i]
+    doubles2_one2$ddg_fold[i] <- doubles2_one$ddg_fold2[i]
+    doubles2_one2$ddg_trimer[i] <- doubles2_one$ddg_trimer2[i]
+    doubles2_one2$ddg_fold_other[i] <- doubles2_one$ddg_fold1[i]
+    doubles2_one2$ddg_trimer_other[i] <- doubles2_one$ddg_trimer1[i]
+  }
+} 
+
+doubles2_one2$mut_viab_label <- 
+  ifelse(doubles2_one2$mut_viab == 1, "one mut viable", "one mut inviable")
+
+doubles2_one2 %>% group_by(mut_viab_label, double_viab) %>% count()
+
+```
+Statistical tests
+```{r}
+doubles2_two$total_sing_viab <- doubles2_two$mut1_viab + doubles2_two$mut2_viab
+table(doubles2_two$double_viab, doubles2_two$total_sing_viab)
+chisq.test(table(doubles2_two$double_viab, doubles2_two$total_sing_viab))
+
+table(doubles2_one2$double_viab, doubles2_one2$mut_viab_label)
+chisq.test(table(doubles2_one2$double_viab, doubles2_one2$mut_viab_label))
+```
+Plots
+```{r}
+df1 <- doubles2_two %>% filter(total_sing_viab == 2) %>% select(variant, double_viab) %>% 
+  mutate(inviab_mut = "none", inviab_mut2 = "Both viable")
+df2 <- doubles2_two %>% filter(total_sing_viab == 1) %>% select(variant, double_viab) %>% 
+  mutate(inviab_mut = "one", inviab_mut2 = "At least one inviable")
+df3 <- doubles2_two %>% filter(total_sing_viab == 0) %>% select(variant, double_viab) %>% 
+  mutate(inviab_mut = "both", inviab_mut2 = "At least one inviable")
+df4 <- doubles2_one2 %>% filter(mut_viab_label == "one mut inviable") %>% select(variant, double_viab) %>%
+  mutate(inviab_mut = "info_missing", inviab_mut2 = "At least one inviable")
+df <- bind_rows(df1, df2, df3, df4)
+df$double_viab <- factor(df$double_viab)
+df$inviab_mut <- factor(df$inviab_mut, levels = c("none", "one", "both", "info_missing"))
+df$inviab_mut2 <- factor(df$inviab_mut2, levels = c("Both viable", "At least one inviable"))
+table(df$double_viab, df$inviab_mut)
+table(df$double_viab, df$inviab_mut2)
+
+label_inviab <- data.frame(label = c("inviable = 2", "inviable = 22", "inviable = 21"),
+                         singles_info = c("both inviable", "both viable", "mixed"),
+                         x = c(25, 25, 25), y = c(6, 6, 6)) 
+label_viab <- data.frame(label = c("viable = 0", "viable = 214", "viable = 7"),
+                         singles_info = c("both inviable", "both viable", "mixed"),
+                         x = c(25, 25, 25), y = c(4.5, 4.5, 4.5)) 
+p_doub_bar <-
+df %>%
+  ggplot(aes(x = inviab_mut2, fill = double_viab)) +
+    geom_bar(stat = "count", width = 0.4) +
+    scale_fill_manual(values = c("darkorange2", "royalblue4"),
+                      name = "Double's viability",
+                      labels = c("inviable", "viable")) +
+    labs(y = "Number of unique variants") +
+    theme_bw() +
+    theme(axis.title.x = element_blank(),
+         legend.position = c(0.7, 0.85))
+# repeat of previous plot but change color and remove legend
+p_doub1_2 <- 
+doubles2_two %>% ggplot(aes(ddg_fold_sum, ddg_trimer_sum)) +
+  geom_point(aes(color = as.factor(double_viab)), size = 0.7) +
+  scale_color_manual(values = c("darkorange2", "royalblue4"),
+                     name = "Double's viability",
+                     labels = c("inviable", "viable")) +
+  facet_grid(rows = vars(singles_info)) +
+  theme_bw() +
+  geom_text(data = label_inviab,
+            aes(x = x, y = y, label = label), size = 3) +
+  geom_text(data = label_viab,
+            aes(x = x, y = y, label = label), size = 3) +
+  labs(x = expression(paste("Sum of ", Delta, Delta, "G")[fold]~(kcal/mol)),
+       y = expression(paste("Sum of ", Delta, Delta, "G")[bind]~(kcal/mol))) +
+  theme(legend.position = "null",
+        axis.title = element_text(size = 12),
+        axis.text = element_text(size = 8))
+
+plot_grid(p_doub_bar, p_doub1_2, labels = c("A", "B"),
+          rel_widths = c(.8, 1))
+#ggsave("../figures/doub_viability2.pdf", width = 200, height = 90, units = "mm", dpi = 300)
+```
+
+
+
