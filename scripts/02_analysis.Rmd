@@ -265,7 +265,7 @@ ggarrange(bar_viab_variants,
           ncol = 2,
           labels = "A")
 
-# ggsave("../figures/overview_plots.pdf", 
+# ggsave("../figures/overview_plots.pdf",
 #       width = 200, height = 100, units = "mm", dpi = 300)
 ```
 
@@ -273,19 +273,118 @@ ggarrange(bar_viab_variants,
 ## Viability modeling - Singles
 
 MBM fitting
+
+Asymptote estimate
 ```{r}
-m <- glm.mrb(viability~ddg_fold+ddg_trimer, data = scores_viability_all,
-                     x.with.me.offsets = c(TRUE, TRUE),
-                     me.offsets = ~(abs(errpt_fold))+(abs(errpt_trimer)),
-                     minp.formula = ~-1,
-                     maxp.formula = ~1,
-                     control = list(lower.intercepts = 'xq5',
-                                    upper.intercepts = 'xq95'),
-                     link = 'logit' ) 
-summary(m)
+## quantile restrictions on the regression intercepts (an intercept is 
+#  restricted to the interval [lowxq, uppxq] of the corresponding
+#  predictor); defaults to [-Inf, Inf].
+lowxq <- 'xmin'
+uppxq <- 'xq95' # we would not want an intercept to be in the right tail of predictor distribution
+
+#Simple r-squared values between y and each predictor x
+cor(cbind(scores_viability_all[, c('viability', 'ddg_fold', 'ddg_trimer')]))[1, 2:3]^2
+
+# Because we have more than one predictor, we estimate the asymptote using the empirical method (as opposed to maximum likelihood)
+
+# Crude estimate
+Linf_single <- infer.lambda(y = scores_viability_all$viability, x = scores_viability_all[,c('ddg_fold', 'ddg_trimer')])
+
+# The crude asymptote estimate, and its 95% confidence interval 
+Linf_single$lambda
+Linf_single$conf.int
+
+# Correct the empirical asymptote estimator (using a naive ML estimate of the regression coefficients)
+mu_ab <- Linf_single$lambda
+pick <- Linf_single$which
+npick <- length(pick)
+
+single_no_err0 <- glm.mrb(viability ~ ddg_fold + ddg_trimer, data = scores_viability_all,
+                         control = list(fixL = FALSE,
+                                        lower.intercepts = lowxq,
+                                        upper.intercepts = uppxq,
+                                        penalize.intercepts = FALSE),
+                         Lstart = Linf_single$lambda,
+                         x = TRUE, y = TRUE)
+
+hvalues <- single_no_err0$mu[pick] / single_no_err0$L.values
+omega_ab <- mean(hvalues)
+omega2_ab <- var(hvalues) / npick
+Lhat <- max(min(mu_ab / (omega_ab - omega2_ab), 1-single_no_err0$control$epsilon), single_no_err0$control$epsilon)
+Lconf.int <- pmax(pmin(Linf_single$conf.int / (omega_ab - omega2_ab), 1-single_no_err0$control$epsilon), single_no_err0$control$epsilon) # Assuming omega_ab is a constant
+
+# Final estimates and 95% confidence interval 
+Lhat
+Lconf.int
 ```
 
-Creating figures
+# Fit without measurement error
+```{r }
+# Fit and summarize the model
+single_no_err <- glm.mrb(viability ~ ddg_fold + ddg_trimer, data = scores_viability_all,
+                         control = list(fixL = TRUE,
+                                        lower.intercepts = lowxq,
+                                        upper.intercepts = uppxq,
+                                        penalize.intercepts = FALSE,
+                                        nobs.power = 0.5),
+                         Lstart = Lhat,
+                         x = TRUE, y = TRUE)
+summary(single_no_err)
+
+```
+
+
+
+# Fit with measurement error
+
+```{r}
+# Correct the empirical asymptote estimate (using a naive ML estimate of the regression coefficients)
+mu_ab <- Linf_single$lambda
+pick <- Linf_single$which
+npick <- length(pick)
+
+single_err0 <- glm.mrb(viability~ddg_fold+ddg_trimer, data = scores_viability_all,
+                      x.with.me.offsets = c(TRUE, TRUE),
+                      me.offsets = ~(abs(errpt_fold))+(abs(errpt_trimer)),
+                      minp.formula = ~-1,
+                      maxp.formula = ~1,
+                      control = list(fixL = FALSE,
+                                        lower.intercepts = lowxq,
+                                        upper.intercepts = uppxq,
+                                        penalize.intercepts = FALSE),
+                         Lstart = Linf_single$lambda,
+                      link = 'logit')
+summary(single_err0)
+
+hvalues <- single_err0$mu[pick] / single_err0$L.values
+omega_ab <- mean(hvalues)
+omega2_ab <- var(hvalues) / npick
+Lhat <- max(min(mu_ab / (omega_ab - omega2_ab), 1-single_err0$control$epsilon), single_err0$control$epsilon)
+Lconf.int <- pmax(pmin(Linf_single$conf.int / (omega_ab - omega2_ab), 1-single_err0$control$epsilon), single_err0$control$epsilon) # Assuming omega_ab is a constant
+
+# Final asymptote estimates and 95% confidence interval 
+Lhat
+Lconf.int
+```
+
+```{r }
+single_err <- glm.mrb(viability~ddg_fold+ddg_trimer, data = scores_viability_all,
+                      x.with.me.offsets = c(TRUE, TRUE),
+                      me.offsets = ~(abs(errpt_fold))+(abs(errpt_trimer)),
+                      minp.formula = ~-1,
+                      maxp.formula = ~1,
+                      control = list(fixL = TRUE,
+                                     lower.intercepts = lowxq,
+                                     upper.intercepts = uppxq,
+                                     nobs.power = 0.5,
+                                     slope.signs = "negative"),
+                         Lstart = Lhat,
+                      link = 'logit')
+summary(single_err)
+```
+
+Contour plot and individual probability curves
+
 ```{r}
 # Create a new df to store predicted values
 viab_pred <- scores_viability_all %>%
@@ -295,11 +394,11 @@ y <- seq(-3, 20, length.out = 100)
 grid <- expand.grid(x, y)
 viab_pred <- data.frame(ddg_fold = grid$Var1,
                         ddg_trimer = grid$Var2)
-viab_pred$bi_fit <- predict(m, newdata = viab_pred)
-viab_pred$fold_fit <- predict(m,
+viab_pred$bi_fit <- predict(single_err, newdata = viab_pred)
+viab_pred$fold_fit <- predict(single_err,
                               newdata = data.frame(ddg_fold = viab_pred$ddg_fold,
                                                    ddg_trimer = rep(0, nrow(viab_pred))))
-viab_pred$bind_fit <- predict(m,
+viab_pred$bind_fit <- predict(single_err,
                               newdata = data.frame(ddg_fold = rep(0, nrow(viab_pred)),
                                                    ddg_trimer = viab_pred$ddg_trimer))
 
@@ -319,7 +418,7 @@ ggplot(viab_pred, aes(ddg_fold, ddg_trimer)) +
   scale_x_continuous(expand = c(0,0)) +
   # create points (that will be covered up by the second geom_point) for the binned color legend
   geom_point(data = scores_viability_all, aes(ddg_fold, ddg_trimer, 
-                                          color = m$fitted.values, shape = factor(viability))) +
+                                          color = single_err$fitted.values, shape = factor(viability))) +
   scale_color_stepsn(n.breaks = 10, colors = colors10) +
   # create points to show viable/inviable datapoints
   geom_point(data = scores_viability_all, aes(ddg_fold, ddg_trimer, shape = factor(viability)),
@@ -342,7 +441,7 @@ start <- min(scores_viability_all$ddg_fold)
 end <- max(scores_viability_all$ddg_fold)
 x <- seq(start, end, by = 0.05)
 
-prob <- predict(m,
+prob <- predict(single_err,
              newdata = data.frame(
                ddg_fold = x,
                ddg_trimer = rep(0, length(x))
@@ -364,7 +463,7 @@ start <- min(scores_viability_all$ddg_trimer)
 end <- max(scores_viability_all$ddg_fold)
 x <- seq(start, end, by = 0.05)
 
-prob <- predict(m,
+prob <- predict(single_err,
              newdata = data.frame(
                ddg_fold = rep(0, length(x)),
                ddg_trimer = x
@@ -386,6 +485,8 @@ right_col <- plot_grid(p2, p3, nrow = 2)
 plot_grid(p1, right_col, ncol = 2, rel_widths = c(3, 2), labels = c("A", "B"))
 #ggsave("../figures/viab_models.pdf", width = 170, height = 90, units = "mm", dpi = 300)
 ```
+
+
 
 ## Linear regression modeling
 
@@ -450,7 +551,6 @@ plot_grid(
 
 ## Viability modeling - Doubles
 
-Create a new doubles dataframe with errors and fit MBM:
 ```{r}
 doubles2_err <- doubles2 %>% select(variant, viability, mut1, mut2, ddg_fold_sum, ddg_trimer_sum)
 for (i in 1:nrow(doubles2_err)){
@@ -462,18 +562,96 @@ for (i in 1:nrow(doubles2_err)){
   doubles2_err$errpt_trimer_sum[i] <- sum(err_trimer1, err_trimer2)
 }
 
-m_doubles <- glm.mrb(viability~ddg_fold_sum+ddg_trimer_sum, data = doubles2_err,
-                     x.with.me.offsets = c(TRUE, TRUE),
-                     me.offsets = ~errpt_fold_sum+errpt_trimer_sum,
-                     minp.formula = ~-1,
-                     maxp.formula = ~1,
-                     control = list(lower.intercepts = 'xq5',
-                                    upper.intercepts = 'xq95'),
-                     link = 'logit' )
-summary(m_doubles)
+
+# Because we have more than one predictor, we estimate the asymptote using the empirical method (as opposed to maximum likelihood)
+
+# Crude estimate
+Linf_double <- infer.lambda(y = doubles2_err$viability, x = doubles2_err[,c('ddg_fold_sum', 'ddg_trimer_sum')])
+
+# The crude asymptote estimate, and its 95% confidence interval 
+Linf_double$lambda
+Linf_double$conf.int
+
+# Correct the empirical asymptote estimator (using a naive ML estimate of the regression coefficients)
+mu_ab <- Linf_double$lambda
+pick <- Linf_double$which
+npick <- length(pick)
+
+double_no_err0 <- glm.mrb(viability ~ ddg_fold_sum + ddg_trimer_sum, data = doubles2_err,
+                         control = list(fixL = FALSE,
+                                        lower.intercepts = lowxq,
+                                        upper.intercepts = uppxq,
+                                        penalize.intercepts = FALSE),
+                         Lstart = Linf_double$lambda,
+                         x = TRUE, y = TRUE)
+
+hvalues <- double_no_err0$mu[pick] / double_no_err0$L.values
+omega_ab <- mean(hvalues)
+omega2_ab <- var(hvalues) / npick
+Lhat <- max(min(mu_ab / (omega_ab - omega2_ab), 1-double_no_err0$control$epsilon), double_no_err0$control$epsilon)
+Lconf.int <- pmax(pmin(Linf_double$conf.int / (omega_ab - omega2_ab), 1-double_no_err0$control$epsilon), double_no_err0$control$epsilon) # Assuming omega_ab is a constant
+
+# Final estimates and 95% confidence interval 
+Lhat
+Lconf.int
+
+# Fit and summarize the model
+double_no_err <- glm.mrb(viability~ddg_fold_sum+ddg_trimer_sum, data = doubles2_err,
+                         control = list(fixL = TRUE,
+                                        lower.intercepts = lowxq,
+                                        upper.intercepts = uppxq,
+                                        penalize.intercepts = FALSE,
+                                        nobs.power = 0.5),
+                         Lstart = Lhat,
+                         x = TRUE, y = TRUE)
+summary(double_no_err)
 ```
 
-Plots
+With measurement error
+```{r}
+# Correct the empirical asymptote estimator (using a naive ML estimate of the regression coefficients)
+mu_ab <- Linf_double$lambda
+pick <- Linf_double$which
+npick <- length(pick)
+
+double_err0 <- glm.mrb(viability ~ ddg_fold_sum + ddg_trimer_sum, data = doubles2_err,
+                       x.with.me.offsets = c(TRUE, TRUE),
+                      me.offsets = ~(abs(errpt_fold_sum))+(abs(errpt_trimer_sum)),
+                      minp.formula = ~-1,
+                      maxp.formula = ~1,
+                         control = list(fixL = FALSE,
+                                        lower.intercepts = lowxq,
+                                        upper.intercepts = uppxq,
+                                        penalize.intercepts = FALSE),
+                         Lstart = Linf_double$lambda,
+                         x = TRUE, y = TRUE)
+
+hvalues <- double_err0$mu[pick] / double_err0$L.values
+omega_ab <- mean(hvalues)
+omega2_ab <- var(hvalues) / npick
+Lhat <- max(min(mu_ab / (omega_ab - omega2_ab), 1-double_err0$control$epsilon), double_err0$control$epsilon)
+Lconf.int <- pmax(pmin(Linf_double$conf.int / (omega_ab - omega2_ab), 1-double_err0$control$epsilon), double_err0$control$epsilon) # Assuming omega_ab is a constant
+
+# Final estimates and 95% confidence interval 
+Lhat
+Lconf.int
+
+# Fit
+double_err <- glm.mrb(viability~ddg_fold_sum+ddg_trimer_sum, data = doubles2_err,
+                     x.with.me.offsets = c(TRUE, TRUE),
+                      me.offsets = ~(abs(errpt_fold_sum))+(abs(errpt_trimer_sum)),
+                      minp.formula = ~-1,
+                      maxp.formula = ~1,
+                      control = list(fixL = TRUE,
+                                     lower.intercepts = lowxq,
+                                     upper.intercepts = uppxq,
+                                     nobs.power = 0.5),
+                      Lstart = Lhat,
+                      link = 'logit')
+summary(double_err)
+```
+
+Figures
 ```{r}
 # bivariate contour plot with scatter plot overlay
 x <- seq(-3, max(doubles2_err$ddg_fold_sum), length.out = 100)
@@ -481,14 +659,14 @@ y <- seq(-3, 20, length.out = 100)
 grid <- expand.grid(x, y)
 doubles2_err_pred <- data.frame(ddg_fold_sum = grid$Var1,
                                 ddg_trimer_sum = grid$Var2)
-doubles2_err_pred$bi_fit <- predict(m_doubles,
+doubles2_err_pred$bi_fit <- predict(double_err,
                                     newdata = doubles2_err_pred)
 doubles2_err_pred$fold_fit <- 
-  predict(m_doubles, 
+  predict(double_err, 
           newdata = data.frame(ddg_fold_sum = doubles2_err_pred$ddg_fold_sum, 
                                ddg_trimer_sum = rep(0, nrow(doubles2_err_pred))))
 doubles2_err_pred$bind_fit <- 
-  predict(m_doubles,
+  predict(double_err,
           newdata = data.frame(ddg_fold_sum = rep(0, nrow(doubles2_err_pred)),
                                ddg_trimer_sum = doubles2_err_pred$ddg_trimer_sum))
 pal <- colorRampPalette(c("#e9ede1", "#2dada3", "#20488a"))
@@ -505,7 +683,7 @@ ggplot(doubles2_err_pred, aes(ddg_fold_sum, ddg_trimer_sum)) +
   scale_x_continuous(expand = c(0,0)) +
   # create points (that will be covered up by the second geom_point) for the binned color legend
   geom_point(data = doubles2_err, aes(ddg_fold_sum, ddg_trimer_sum, 
-                                          color = m_doubles$fitted.values, shape = factor(viability))) +
+                                          color = double_err$fitted.values, shape = factor(viability))) +
   scale_color_stepsn(n.breaks = 10, colors = colors10) +
   # create points to show viable/inviable datapoints
   geom_point(data = doubles2_err, aes(ddg_fold_sum, ddg_trimer_sum, shape = factor(viability)),
@@ -527,7 +705,7 @@ ggplot(doubles2_err_pred, aes(ddg_fold_sum, ddg_trimer_sum)) +
 start <- min(doubles2_err$ddg_fold_sum)
 end <- max(doubles2_err$ddg_fold_sum)
 x <- seq(start, end, by = 0.05)
-prob <- predict(m_doubles, newdata = data.frame(ddg_fold_sum = x,
+prob <- predict(double_err, newdata = data.frame(ddg_fold_sum = x,
                                          ddg_trimer_sum = rep(0, length(x))))
 p2 <- 
 ggplot(doubles2_err, aes(ddg_fold_sum, y = viability)) +
@@ -545,7 +723,7 @@ ggplot(doubles2_err, aes(ddg_fold_sum, y = viability)) +
 start <- min(doubles2_err$ddg_trimer_sum)
 end <- max(doubles2_err$ddg_fold_sum)
 x <- seq(start, end, by = 0.05)
-prob <- predict(m_doubles, newdata = data.frame(ddg_fold_sum = rep(0, length(x)),
+prob <- predict(double_err, newdata = data.frame(ddg_fold_sum = rep(0, length(x)),
                                          ddg_trimer_sum = x))
 p3 <- 
 ggplot(doubles2_err, aes(x = ddg_trimer_sum, y = viability)) +
@@ -564,8 +742,9 @@ right_col <- plot_grid(p2, p3, nrow = 2)
 plot_grid(p1, right_col, ncol = 2, rel_widths = c(3,2), labels = c("A", "B"))
 
 #ggsave("../figures/doub_viab_models.pdf", width = 170, height = 90, units = "mm", dpi = 300)
-
 ```
+
+
 
 ## Doubles viability relationship with singles viability
 
