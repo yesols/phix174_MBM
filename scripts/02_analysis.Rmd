@@ -538,15 +538,8 @@ ggplot(scores2, aes(ddg_trimer, score)) +
 # combine both
 score_both <- 
 plot_grid(score_fold, score_bind, labels = c("A", "B"))
-ggsave("../figures/scores.pdf",
-       width = 170, height = 90, units = "mm", dpi = 300)
-
-plot_grid(
-  score_both,
-  ncol = 1,
-  rel_heights = c(0.1, 1)
-)
-#ggsave("../figures/scores.png", width = 9, height = 4, bg = "white")
+# ggsave("../figures/scores.pdf",
+#        width = 170, height = 90, units = "mm", dpi = 300)
 ```
 
 ## Viability modeling - Doubles
@@ -875,7 +868,7 @@ doubles2_two %>% ggplot(aes(ddg_fold_sum, ddg_trimer_sum)) +
 
 plot_grid(p_doub_bar, p_doub1_2, labels = c("A", "B"),
           rel_widths = c(.8, 1))
-#ggsave("../figures/doub_viability2.pdf", width = 200, height = 90, units = "mm", dpi = 300)
+ggsave("../figures/doub_viability2.pdf", width = 200, height = 90, units = "mm", dpi = 300)
 ```
 
 
